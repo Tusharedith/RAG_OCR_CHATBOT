@@ -8,6 +8,8 @@ A production-ready Retrieval-Augmented Generation (RAG) chatbot featuring **mult
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
+<img width="1666" height="635" alt="image" src="https://github.com/user-attachments/assets/1b39fe00-6b2d-4e13-8091-fc4114a3c55f" />
+
 
 ## 🎯 Key Features
 
