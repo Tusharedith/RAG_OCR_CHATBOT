@@ -22,6 +22,8 @@ __pycache__/
 *.pyd
 *.db
 *.sqlite3
+.mypy_cache/
+mypy_cache/
 
 # ---- Environment & Config ----
 .env

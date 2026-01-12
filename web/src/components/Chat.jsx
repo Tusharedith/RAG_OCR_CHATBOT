@@ -7,12 +7,10 @@ function Chat({ uploadedDoc }) {
   const [citations, setCitations] = useState([]);
   const [selectedCitation, setSelectedCitation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [chatMode, setChatMode] = useState('general'); // 'general' or 'document'
+  const [chatMode, setChatMode] = useState('general');
 
-  // Update chat mode based on uploaded document
   useEffect(() => {
     setChatMode(uploadedDoc ? 'document' : 'general');
-    // Clear previous answer when switching modes
     if (answer) {
       setAnswer("");
       setCitations([]);
@@ -31,23 +29,23 @@ function Chat({ uploadedDoc }) {
       let response;
       
       if (chatMode === 'document' && uploadedDoc) {
-        // Use RAG query endpoint for document-based questions
         response = await axios.post("http://localhost:8000/query", {
           question: question,
           document_id: uploadedDoc.document_id,
           top_k: 5
         });
         setAnswer(response.data.answer);
-        setCitations(response.data.citations || []);
+        const citationsData = response.data.citations || [];
+        console.log("Received citations:", citationsData);
+        setCitations(citationsData);
       } else {
-        // Use general chat endpoint for regular conversation
         response = await axios.post("http://localhost:8000/query", {
           question: question,
           document_id: uploadedDoc?.document_id || "default",
           top_k: 5
         });
         setAnswer(response.data.answer);
-        setCitations([]); // No citations for general chat
+        setCitations([]);
       }
     } catch (err) {
       console.error(err);
@@ -58,20 +56,26 @@ function Chat({ uploadedDoc }) {
     }
   };
 
-  // Render answer with clickable citation markers
   const renderAnswerWithCitations = (text) => {
-    if (!text || citations.length === 0) return text;
+    if (!text) return text;
+    if (citations.length === 0) return text;
     
-    // Split text by citation markers (🔗1, 🔗2, etc.)
     const parts = text.split(/(🔗\d+)/g);
     
     return parts.map((part, index) => {
-      // Check if this part is a citation marker
       const citationMatch = part.match(/🔗(\d+)/);
       
       if (citationMatch) {
         const citationId = part;
-        const citation = citations.find(c => c.id === citationId);
+        const citation = citations.find(c => {
+          if (c.id === citationId) return true;
+          const numMatch = citationId.match(/🔗(\d+)/);
+          if (numMatch) {
+            const num = numMatch[1];
+            return c.id === `🔗${num}` || c.id === num || c.id === `cite_${num}`;
+          }
+          return false;
+        });
         
         if (citation) {
           return (
@@ -82,11 +86,13 @@ function Chat({ uploadedDoc }) {
                        bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 hover:text-purple-200
                        border border-purple-500/30 hover:border-purple-500/50
                        transition-all duration-200 cursor-pointer transform hover:scale-105"
-              title={citation.label || `Page ${citation.page} - ${citation.modality}`}
+              title={citation.label || citation.modality || `Source ${index + 1}`}
             >
               {citationId}
             </button>
           );
+        } else {
+          console.warn(`Citation marker ${citationId} found but no matching citation in array:`, citations);
         }
       }
       
@@ -102,21 +108,18 @@ function Chat({ uploadedDoc }) {
   };
 
   return (
-    <div className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 rounded-2xl shadow-2xl border border-purple-500/20 backdrop-blur-sm">
-      {/* Animated background elements */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 rounded-2xl shadow-2xl border border-purple-500/20 backdrop-blur-sm">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(120,119,198,0.15),transparent)] animate-pulse"></div>
       <div className="absolute -top-4 -right-4 w-24 h-24 bg-purple-500/10 rounded-full blur-2xl animate-pulse"></div>
       <div className="absolute -bottom-4 -left-4 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl animate-pulse delay-1000"></div>
       
       <div className="relative p-8">
-        {/* Header */}
         <div className="mb-8 text-center">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 bg-clip-text text-transparent">
               AI Assistant
             </h2>
             
-            {/* Mode Indicator */}
             <div className={`px-3 py-1 rounded-full text-xs font-medium border transition-all duration-300 ${
               chatMode === 'document' 
                 ? 'bg-green-500/10 border-green-500/30 text-green-400' 
@@ -134,10 +137,6 @@ function Chat({ uploadedDoc }) {
           </p>
         </div>
 
-        
-      
-
-        {/* Input Section */}
         <div className="relative mb-6">
           <textarea
             className="w-full p-6 bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl 
@@ -156,7 +155,6 @@ function Chat({ uploadedDoc }) {
             disabled={isLoading}
           />
           
-          {/* Floating action button */}
           <button
             onClick={askQuestion}
             disabled={!question.trim() || isLoading}
@@ -185,16 +183,13 @@ function Chat({ uploadedDoc }) {
             </div>
           </button>
 
-          {/* Keyboard hint */}
           <div className="absolute -bottom-6 right-0 text-xs text-slate-500">
             Ctrl + Enter to send
           </div>
         </div>
 
-        {/* Answer Section */}
         {answer && (
           <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
-            {/* Answer Card */}
             <div className="relative overflow-hidden bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-6">
               <div className={`absolute top-0 left-0 w-full h-1 ${
                 chatMode === 'document' 
@@ -241,8 +236,7 @@ function Chat({ uploadedDoc }) {
               </div>
             </div>
 
-            {/* Citations Section - Only for document mode */}
-            {citations.length > 0 && chatMode === 'document' && (
+            {citations && citations.length > 0 && chatMode === 'document' && (
               <div className="relative overflow-hidden bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-6
                            animate-in slide-in-from-bottom-4 duration-700 delay-200">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-teal-500"></div>
@@ -259,63 +253,65 @@ function Chat({ uploadedDoc }) {
                   </div>
                   
                   <div className="flex-1 min-w-0">
-                    <h4 className="text-lg font-semibold text-white mb-4">Citations from Document</h4>
+                    <h4 className="text-lg font-semibold text-white mb-4">
+                      Citations from Document {citations.length > 0 && `(${citations.length})`}
+                    </h4>
                     <div className="space-y-3">
-                      {citations.map((citation, index) => (
-                        <div key={citation.id} 
-                             onClick={() => setSelectedCitation(citation)}
-                             className={`group flex flex-col space-y-2 p-4 rounded-lg 
-                                      border transition-all duration-200 cursor-pointer
-                                      ${selectedCitation?.id === citation.id 
-                                        ? 'bg-purple-500/20 border-purple-500/50' 
-                                        : 'bg-white/5 border-white/5 hover:border-white/10 hover:bg-white/10'
-                                      }`}
-                             style={{ animationDelay: `${index * 100}ms` }}>
-                          <div className="flex items-center space-x-3">
-                            <div className="flex-shrink-0">
-                              <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-500 
-                                           rounded-md flex items-center justify-center text-white text-sm font-medium">
-                                {citation.id}
-                              </div>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex flex-col space-y-1">
-                                <span className="text-slate-200 font-medium">
-                                  {citation.label || `Page ${citation.page} (${citation.modality})`}
-                                </span>
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-slate-400 text-xs">
-                                    Page {citation.page}
-                                  </span>
-                                  <span className={`px-2 py-0.5 rounded text-xs font-medium
-                                    ${citation.modality === 'text' ? 'bg-blue-500/20 text-blue-300' :
-                                      citation.modality === 'table' ? 'bg-green-500/20 text-green-300' :
-                                      'bg-orange-500/20 text-orange-300'}`}>
-                                    {citation.modality}
-                                  </span>
+                      {citations.map((citation, index) => {
+                        const citationKey = citation.id || `citation-${index}`;
+                        return (
+                          <div key={citationKey} 
+                               onClick={() => setSelectedCitation(citation)}
+                               className={`group flex flex-col space-y-2 p-4 rounded-lg 
+                                        border transition-all duration-200 cursor-pointer
+                                        ${selectedCitation?.id === citation.id 
+                                          ? 'bg-purple-500/20 border-purple-500/50' 
+                                          : 'bg-white/5 border-white/5 hover:border-white/10 hover:bg-white/10'
+                                        }`}
+                               style={{ animationDelay: `${index * 100}ms` }}>
+                            <div className="flex items-center space-x-3">
+                              <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-500 
+                                             rounded-md flex items-center justify-center text-white text-sm font-medium">
+                                  {citation.id || `🔗${index + 1}`}
                                 </div>
                               </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex flex-col space-y-1">
+                                  <span className="text-slate-200 font-medium">
+                                    {citation.label || citation.modality || `Source ${index + 1}`}
+                                  </span>
+                                  <div className="flex items-center space-x-2">
+                                    <span className={`px-2 py-0.5 rounded text-xs font-medium
+                                      ${citation.modality === 'text' ? 'bg-blue-500/20 text-blue-300' :
+                                        citation.modality === 'table' ? 'bg-green-500/20 text-green-300' :
+                                        citation.modality === 'figure' ? 'bg-orange-500/20 text-orange-300' :
+                                        'bg-purple-500/20 text-purple-300'}`}>
+                                      {citation.modality || 'text'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
                             </div>
-                            <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                              </svg>
-                            </div>
+                            {selectedCitation?.id === citation.id && citation.excerpt && (
+                              <div className="pl-11 text-sm text-slate-300 leading-relaxed border-l-2 border-purple-500/30 ml-4">
+                                <p className="italic">"{citation.excerpt}"</p>
+                              </div>
+                            )}
                           </div>
-                          {selectedCitation?.id === citation.id && citation.excerpt && (
-                            <div className="pl-11 text-sm text-slate-300 leading-relaxed border-l-2 border-purple-500/30 ml-4">
-                              <p className="italic">"{citation.excerpt}"</p>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Clear conversation button */}
             <div className="flex justify-center pt-4">
               <button
                 onClick={() => {

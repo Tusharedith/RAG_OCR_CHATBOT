@@ -1,13 +1,9 @@
-"""
-Modular PDF extraction package
-Separates text, table, and image processing into independent modules
-"""
+"""PDF extraction: text, tables, images with OCR"""
 from typing import List, Dict, Optional
 import hashlib
 import sys
 import os
 
-# Add parent directory to path for models import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models import DocumentElement, Chunk, ModalityType
 from .pdf_text import TextExtractor
@@ -16,10 +12,7 @@ from .pdf_images import ImageExtractor
 
 
 class MultiModalParser:
-    """
-    Orchestrator for multi-modal PDF parsing
-    Coordinates text, table, and image extraction modules
-    """
+    """Orchestrates text, table, and image extraction"""
     
     def __init__(self):
         self.text_extractor = TextExtractor()
@@ -28,29 +21,18 @@ class MultiModalParser:
         self.elements = []
     
     def parse_pdf(self, pdf_path: str) -> List[DocumentElement]:
-        """
-        Parse PDF using modular extractors
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            List of DocumentElement objects from all modalities
-        """
+        """Parses PDF using all extractors"""
         elements = []
         
         print(f"\nParsing PDF: {pdf_path}")
         print("=" * 60)
         
-        # Extract text elements
         text_elements = self.text_extractor.extract(pdf_path)
         elements.extend(text_elements)
         
-        # Extract table elements
         table_elements = self.table_extractor.extract(pdf_path)
         elements.extend(table_elements)
         
-        # Extract figure elements with OCR
         figure_elements = self.image_extractor.extract(pdf_path)
         elements.extend(figure_elements)
         
@@ -67,17 +49,14 @@ class MultiModalParser:
 
 
 class ModalityAwareChunker:
-    """Smart chunking strategy based on modality"""
+    """Chunks by modality: text (sliding window), tables/figures (atomic)"""
     
     def __init__(self, text_chunk_size: int = 700, overlap: int = 100):
         self.text_chunk_size = text_chunk_size
         self.overlap = overlap
     
     def chunk_elements(self, elements: List[DocumentElement], source: str) -> List[Chunk]:
-        """
-        Apply modality-specific chunking rules
-        Handles text (sliding window), tables (atomic), figures (atomic), OCR (atomic)
-        """
+        """Applies modality-specific chunking"""
         chunks = []
         modality_counts = {"text": 0, "table": 0, "figure": 0, "image_ocr": 0, "footnote": 0}
         table_counter = 0
@@ -87,7 +66,6 @@ class ModalityAwareChunker:
         
         for elem in elements:
             if elem.type == ModalityType.TEXT:
-                # Sliding window for narrative text
                 text_chunks = self._sliding_window_chunk(elem.content)
                 for i, chunk_text in enumerate(text_chunks):
                     chunks.append(self._create_chunk(
@@ -101,7 +79,6 @@ class ModalityAwareChunker:
                 modality_counts["text"] += len(text_chunks)
             
             elif elem.type == ModalityType.TABLE:
-                # One table = one chunk (atomic)
                 chunks.append(self._create_chunk(
                     content=elem.content,
                     modality=ModalityType.TABLE,
@@ -114,7 +91,6 @@ class ModalityAwareChunker:
                 modality_counts["table"] += 1
             
             elif elem.type == ModalityType.FIGURE:
-                # One figure + caption = one chunk (atomic)
                 chunks.append(self._create_chunk(
                     content=elem.content,
                     modality=ModalityType.FIGURE,
@@ -127,7 +103,6 @@ class ModalityAwareChunker:
                 modality_counts["figure"] += 1
             
             elif elem.type == ModalityType.IMAGE_OCR:
-                # OCR content = one chunk (atomic)
                 chunks.append(self._create_chunk(
                     content=elem.content,
                     modality=ModalityType.IMAGE_OCR,
@@ -162,7 +137,7 @@ class ModalityAwareChunker:
         return chunks
     
     def _sliding_window_chunk(self, text: str) -> List[str]:
-        """Sliding window chunking with overlap"""
+        """Chunks text with sliding window and overlap"""
         words = text.split()
         chunks = []
         
@@ -176,8 +151,7 @@ class ModalityAwareChunker:
     
     def _create_chunk(self, content: str, modality: ModalityType, 
                      page: int, source: str, index: int = 0, section: Optional[str] = None) -> Chunk:
-        """Create a chunk with unique ID and metadata"""
-        # Use content hash to ensure uniqueness even for same page/modality
+        """Creates chunk with unique ID"""
         chunk_id = hashlib.md5(
             f"{source}_{page}_{modality.value}_{index}_{content[:100]}".encode()
         ).hexdigest()
@@ -188,6 +162,7 @@ class ModalityAwareChunker:
             modality=modality,
             page=page,
             source=source,
+            label=section,
             metadata={
                 "chunk_index": index,
                 "content_length": len(content),
@@ -203,5 +178,3 @@ __all__ = [
     'MultiModalParser',
     'ModalityAwareChunker'
 ]
-
-__all__ = ['TextExtractor', 'TableExtractor', 'ImageExtractor']

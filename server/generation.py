@@ -7,19 +7,11 @@ import re
 
 
 class AnswerGenerator:
-    """
-    Generate faithful, citation-backed answers using Ollama (Mistral-7B)
-    Core principle: Never answer beyond retrieved context
-    """
+    """Generates answers with citations using Ollama Mistral-7B"""
 
     def __init__(self, ollama_url: str = "http://localhost:11434"):
-        """
-        Initialize with Ollama local endpoint
-        """
         self.ollama_url = ollama_url
         self.model = "mistral"
-        
-        # Test connection to Ollama
         try:
             response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
             if response.status_code != 200:
@@ -28,17 +20,7 @@ class AnswerGenerator:
             print(f"Warning: Could not connect to Ollama at {self.ollama_url}: {e}")
 
     def generate_answer(self, query: str, retrieved_chunks: List[Dict]) -> AnswerSchema:
-        """
-        Generate structured answer with ChatGPT-style clickable citations
-
-        Args:
-            query: User question
-            retrieved_chunks: Retrieved context chunks with metadata
-
-        Returns:
-            AnswerSchema with answer text and clickable citations
-        """
-        # CRITICAL: Check if retrieved chunks are empty (table not found)
+        """Main method: generates answer with citations from retrieved chunks"""
         if not retrieved_chunks:
             table_ref = self._extract_table_reference(query)
             if table_ref:
@@ -52,19 +34,59 @@ class AnswerGenerator:
                     citations=[]
                 )
         
-        # Token safety: Limit to top 2 chunks and trim content aggressively
+        has_content = any(
+            chunk.get('content', '').strip() and len(chunk.get('content', '').strip()) > 20 
+            for chunk in retrieved_chunks
+        )
+        if not has_content:
+            return AnswerSchema(
+                answer="Information not found in document.",
+                citations=[]
+            )
+        
         safe_chunks = []
-        for chunk in retrieved_chunks[:2]:  # Reduced from 3 to 2 for speed
+        max_chunks = min(7, len(retrieved_chunks))
+        for chunk in retrieved_chunks[:max_chunks]:
             safe_chunk = chunk.copy()
-            # Trim content to 600 characters to prevent token overflow and speed up processing
             if safe_chunk.get('content'):
-                safe_chunk['content'] = safe_chunk['content'][:600]
+                safe_chunk['content'] = safe_chunk['content'][:800]
             safe_chunks.append(safe_chunk)
         
-        # Format context for model
         context = self._format_context(safe_chunks)
+        
+        actual_labels = []
+        label_mapping = {}
+        for i, chunk in enumerate(safe_chunks, 1):
+            label = chunk.get('label') or chunk.get('section') or ""
+            
+            if not label:
+                modality = chunk.get('modality', 'text')
+                content = chunk.get('content', '')
+                label = self._extract_label_from_content(content, modality, chunk.get('page', -1))
+            
+            if not label:
+                modality = chunk.get('modality', 'text')
+                if modality == 'table':
+                    label = f"Table on page {chunk.get('page', -1)}"
+                elif modality == 'figure':
+                    label = f"Figure on page {chunk.get('page', -1)}"
+                else:
+                    label = f"Text on page {chunk.get('page', -1)}"
+            
+            citation_id = f"🔗{i}"
+            actual_labels.append(f"{citation_id}: {label}")
+            label_mapping[citation_id] = {
+                'label': label,
+                'chunk': chunk,
+                'index': i
+            }
+        
+        available_sources = "\n".join(actual_labels)
 
-        # Construct prompt for natural explanatory response with table/figure faithfulness
+        comparative_keywords = ['vs', 'versus', 'compare', 'comparison', 'differ', 'difference', 'different', 
+                               'evolution', 'transition', 'across', 'between', 'how does', 'what are the differences']
+        is_comparative = any(kw in query.lower() for kw in comparative_keywords)
+        
         prompt = f"""
 Question:
 {query}
@@ -72,35 +94,26 @@ Question:
 Context:
 {context}
 
-Instructions:
-- Answer the question clearly and completely using ONLY the provided context.
-- Write a natural explanatory response (around 8-9 sentences if needed).
-- If helpful, include 2-3 brief bullet points for clarity (optional).
-- Do NOT force a fixed structure; be natural but precise.
+Available Sources (YOU MUST USE THESE EXACT NAMES - DO NOT INVENT NAMES):
+{available_sources}
 
-CRITICAL - For TABLE questions:
-- Copy numeric values EXACTLY as shown in the table - do NOT convert, estimate, or infer.
-- Preserve units (%, QAR billions, etc.) exactly as stated.
-- Always mention the table name: "According to Table 1..." or "Table X shows..."
-- If the table shows "Real GDP growth (%): 2024: 2.0", report EXACTLY "2.0%" NOT "2 percent" or "two percent".
+CRITICAL INSTRUCTIONS:
+1. Answer using ONLY the context above
+2. When citing, you MUST use the EXACT label from "Available Sources" above
+3. DO NOT say "Table 1" if the source is labeled "Table 11" - use "Table 11" exactly
+4. DO NOT say "Figure 3" if the source is labeled "Text Figure 12" - use "Text Figure 12" exactly
+5. SYNTHESIZE information: If the context contains related information across multiple sources, 
+   synthesize it into a coherent answer. Look across ALL provided sources to find relevant information.
+6. For comparative queries (comparing multiple items), examine ALL sources to identify differences, 
+   similarities, and evolution across the items mentioned.
+7. After mentioning the exact label, immediately add the 🔗 marker (e.g., "According to Table 11 🔗1...")
+8. Response length: {"5-8 sentences for this comparative query" if is_comparative else "3-5 sentences"}
+9. Only say "Information not found in document" if truly no relevant information exists in ANY of the sources
 
-CRITICAL - For FIGURE/CHART questions:
-- EXPLICITLY name the figure: "As shown in Text Figure 3..." or "Text Figure 5 demonstrates..."
-- NEVER use vague phrases like "the figure" or "the chart" - always include the full name.
-
-CRITICAL - For OCR content (image_ocr modality):
-- Reference it naturally: "The scanned page notes that..." or "OCR text indicates..."
-
-- Insert reference markers like 🔗1, 🔗2 IMMEDIATELY after mentioning sources.
-- Do NOT invent citations or sources.
-- If the answer is not in the context, say exactly: "Information not found in document"
-
-Return ONLY the answer text (with 🔗 markers where applicable).
+Return ONLY answer text with 🔗 markers inline.
 """
 
-        # Call Ollama model via HTTP
         try:
-            # Combine system prompt and user prompt for Ollama
             full_prompt = f"{self._get_system_prompt()}\n\n{prompt}"
             
             ollama_request = {
@@ -111,24 +124,21 @@ Return ONLY the answer text (with 🔗 markers where applicable).
                     "temperature": 0.1,
                     "num_predict": 800,
                     "num_ctx": 4096,
-                    "num_gpu": 0,  # Force CPU usage (disable GPU)
-                    "num_thread": 4  # Use 4 CPU threads
+                    "num_gpu": 0,
+                    "num_thread": 4
                 }
             }
             
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=ollama_request,
-                timeout=180  # Increased timeout to 3 minutes
+                timeout=270
             )
             
             if response.status_code != 200:
                 raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
             
-            # Extract answer from Ollama response
             answer_text = response.json().get("response", "")
-
-            # Detect modality preference from query
             query_lower = query.lower()
             
             table_keywords = ["table", "data", "statistics", "numbers", "percentage", 
@@ -140,49 +150,69 @@ Return ONLY the answer text (with 🔗 markers where applicable).
             is_table_query = any(kw in query_lower for kw in table_keywords)
             is_figure_query = any(kw in query_lower for kw in figure_keywords)
             
-            # Generate deterministic citations from retrieved chunks
             citations: List[Citation] = []
+            citation_pattern = r'🔗(\d+)'
+            used_citation_ids = set(re.findall(citation_pattern, answer_text))
             
-            # For TABLE queries, use ONLY table chunks
-            if is_table_query and not is_figure_query:
-                table_chunks = [c for c in retrieved_chunks if c.get("modality") == "table"]
-                
-                if table_chunks:
-                    citation_source = table_chunks[:3]  # Use top 3 tables
-                else:
-                    citation_source = retrieved_chunks[:3]  # Fallback
-            
-            # For FIGURE queries, prioritize figures
-            elif is_figure_query:
-                figure_chunks = [c for c in retrieved_chunks if c.get("modality") == "figure"]
-                
-                if figure_chunks:
-                    citation_source = figure_chunks[:3]
-                else:
-                    citation_source = retrieved_chunks[:3]  # Fallback
-            
-            # Default: use top chunks
-            else:
-                citation_source = retrieved_chunks[:3]
-            
-            for i, chunk in enumerate(citation_source, start=1):
+            citation_map = {}
+            for i, chunk in enumerate(safe_chunks, start=1):
+                citation_id = f"🔗{i}"
                 modality = ModalityType(chunk.get("modality", "text"))
                 page = chunk.get("page", -1)
-                section = chunk.get("section", "")
-                content = chunk.get("content", "")
-                
-                # Extract label from content or metadata
-                label = self._extract_label(content, modality, section, page, i)
-                
-                citations.append(
-                    Citation(
-                        id=f"🔗{i}",
-                        label=label,
-                        page=page,
-                        modality=modality,
-                        excerpt=content[:200] if content else ""
+                label = chunk.get("label") or chunk.get("section") or ""
+                if not label:
+                    label = self._extract_label(
+                        chunk.get("content", ""), 
+                        modality, 
+                        chunk.get("section"), 
+                        page, 
+                        i
                     )
-                )
+                
+                citation_map[str(i)] = {
+                    'chunk': chunk,
+                    'label': label,
+                    'modality': modality,
+                    'page': page
+                }
+            
+            if used_citation_ids:
+                for cit_id in sorted(used_citation_ids, key=int):
+                    if cit_id in citation_map:
+                        cit_data = citation_map[cit_id]
+                        chunk = cit_data['chunk']
+                        citations.append(
+                            Citation(
+                                id=f"🔗{cit_id}",
+                                label=cit_data['label'],
+                                page=cit_data['page'],
+                                modality=cit_data['modality'],
+                                excerpt=chunk.get("content", "")[:200]
+                            )
+                        )
+            else:
+                for i, chunk in enumerate(safe_chunks, start=1):
+                    modality = ModalityType(chunk.get("modality", "text"))
+                    page = chunk.get("page", -1)
+                    label = chunk.get("label") or chunk.get("section") or ""
+                    if not label:
+                        label = self._extract_label(
+                            chunk.get("content", ""), 
+                            modality, 
+                            chunk.get("section"), 
+                            page, 
+                            i
+                        )
+                    
+                    citations.append(
+                        Citation(
+                            id=f"🔗{i}",
+                            label=label,
+                            page=page,
+                            modality=modality,
+                            excerpt=chunk.get("content", "")[:200]
+                        )
+                    )
 
             return AnswerSchema(
                 answer=answer_text if answer_text is not None else "",
@@ -191,7 +221,6 @@ Return ONLY the answer text (with 🔗 markers where applicable).
 
         except Exception as e:
             print(f"Generation error: {e}")
-            # Return error as structured output
             return AnswerSchema(
                 answer=f"Error generating answer: {str(e)}",
                 citations=[]
@@ -199,45 +228,48 @@ Return ONLY the answer text (with 🔗 markers where applicable).
 
     def _extract_label(self, content: str, modality: ModalityType, 
                       section: Optional[str], page: int, index: int) -> str:
-        """Extract or generate descriptive label for citation"""
+        """Extracts label from content or generates fallback"""
         if modality == ModalityType.FIGURE:
-            # Try to extract figure caption from content
             lines = content.strip().split('\n')
             for line in lines:
                 line_lower = line.lower().strip()
-                # Look for common figure patterns
-                if any(pattern in line_lower for pattern in ['figure', 'fig.', 'chart', 'graph']):
-                    # Clean and return the caption
-                    label = line.strip()[:100]
-                    if label:
-                        return label
-            # Fallback: use section if available
+                patterns = ['text figure', 'figure', 'fig.', 'chart', 'graph', 'diagram']
+                for pattern in patterns:
+                    if pattern in line_lower:
+                        label = line.strip()[:100]
+                        if label:
+                            return label
             if section:
-                return f"Figure from '{section}' (Page {page})"
-            return f"Figure on Page {page}"
+                return section
+            return f"Figure on page {page}"
         
         elif modality == ModalityType.TABLE:
-            # Try to extract table caption
             lines = content.strip().split('\n')
             for line in lines:
                 line_lower = line.lower().strip()
-                if any(pattern in line_lower for pattern in ['table', 'tbl.']):
+                if re.search(r'table\s+\d+', line_lower):
                     label = line.strip()[:100]
                     if label:
                         return label
-            # Fallback
             if section:
-                return f"Table from '{section}' (Page {page})"
-            return f"Table on Page {page}"
+                return section
+            return f"Table on page {page}"
         
-        else:  # TEXT or FOOTNOTE
-            # Use section name if available
+        else:
             if section:
-                return f"{section} (Page {page})"
-            return f"Text on Page {page}"
+                return section
+            return f"Text on page {page}"
+    
+    def _extract_label_from_content(self, content: str, modality: str, page: int) -> str:
+        """Extract label from content when metadata is missing"""
+        if not content:
+            return ""
+        
+        modality_enum = ModalityType(modality) if isinstance(modality, str) else modality
+        return self._extract_label(content, modality_enum, None, page, 0)
     
     def _format_context(self, chunks: List[Dict]) -> str:
-        """Format retrieved chunks into readable context with labels"""
+        """Formats chunks for LLM with labels"""
         formatted = []
 
         for i, chunk in enumerate(chunks, 1):
@@ -246,21 +278,19 @@ Return ONLY the answer text (with 🔗 markers where applicable).
             section = chunk.get('section', '')
             content = chunk.get('content', '')
             
-            # Generate label for this source
-            label = self._extract_label(content, modality, section, page, i)
+            label = chunk.get('label') or chunk.get('section') or ""
+            if not label:
+                label = self._extract_label(content, modality, section, page, i)
             
-            formatted.append(f"[Source {i}] {label}\n{content}\n")
+            context_marker = "[CONTEXT]" if chunk.get('is_context') else "[SOURCE]"
+            
+            formatted.append(f"{context_marker} {i}: {label} (Page {page})\n{content}\n")
         
         return "\n---\n".join(formatted)
     
     def _extract_table_reference(self, query: str) -> Optional[int]:
-        """
-        Extract explicit table number from query
-        Returns table number if found, None otherwise
-        """
+        """Extracts table number from query if mentioned"""
         query_lower = query.lower()
-        
-        # Match patterns like "table 1", "Table 42"
         match = re.search(r'\btable\s+(\d+)\b', query_lower)
         if match:
             return int(match.group(1))
@@ -268,28 +298,32 @@ Return ONLY the answer text (with 🔗 markers where applicable).
         return None
 
     def _get_system_prompt(self) -> str:
-        """System prompt for ChatGPT-style answers with explicit figure/table naming"""
-        return """You are a precise document analysis assistant. Your role is to answer questions strictly based on provided context from policy documents.
+        """Returns system prompt for LLM"""
+        return """You are a precise document analysis assistant. Your role is to answer questions based on provided context from policy documents.
 
 CRITICAL RULES:
 1. FAITHFULNESS: Only use information explicitly stated in the provided context.
-2. EXPLICIT FIGURE/TABLE NAMING: When citing graphs, charts, or tables, ALWAYS use their full names:
-   - "As shown in Text Figure 3..."
-   - "According to Table 1..."
-   - "Text Figure 5 demonstrates..."
-   - NEVER say "the figure" or "the chart" without the full name.
-3. CITATIONS: Insert reference markers (🔗1, 🔗2) IMMEDIATELY after mentioning figure/table names or making factual claims.
-4. HONESTY: If information is not in context, clearly state "Information not found in document".
-5. NO SPECULATION: Do not infer, extrapolate, or add external knowledge.
-6. PRECISION: Be accurate with numbers, dates, and technical terms.
-7. STYLE: Write clear, natural explanatory answers (8-9 sentences if needed). Bullet points are optional for clarity.
+2. EXACT LABEL USAGE: You will be given a list of "Available Sources" with exact labels. You MUST use these EXACT labels - DO NOT invent or modify them.
+   - If the source says "Table 11", you MUST say "Table 11" (NOT "Table 1")
+   - If the source says "Text Figure 12", you MUST say "Text Figure 12" (NOT "Figure 3")
+   - NEVER guess or approximate table/figure numbers
+3. SYNTHESIS ALLOWED: You may synthesize information across multiple sources in the context. If the question asks for comparisons, differences, or evolution, examine ALL provided sources and combine relevant information.
+4. CITATIONS: Insert reference markers (🔗1, 🔗2) IMMEDIATELY after mentioning the exact source name.
+5. HONESTY: Only say "Information not found in document" if truly no relevant information exists in ANY of the provided sources.
+6. NO SPECULATION: Do not infer, extrapolate, or add external knowledge beyond what's in the context.
+7. PRECISION: Be accurate with numbers, dates, and technical terms. Copy table values EXACTLY.
+8. STYLE: Write clear, natural explanatory answers. For simple queries: 3-5 sentences. For comparative/complex queries: 5-8 sentences.
 
 OUTPUT GUIDELINES:
 - Return only the answer text (include 🔗 markers inline where claims are made).
-- The API will attach the corresponding cited sources (id, label, page, modality, excerpt) separately.
+- Match the exact source names from "Available Sources" - do not create your own names.
+- For comparative queries, synthesize information from multiple sources when available.
 
 EXAMPLE (answer only):
-Q: What does the report say about inflation?
-A: As shown in Text Figure 3 🔗1, inflation has declined through 2023 and 2024, reflecting easing domestic pressures. According to Table 1 🔗2, the medium-term outlook remains positive due to LNG expansion and reforms.
+Q: What is the GDP growth for 2024?
+A: According to Table 11 🔗1, the real GDP growth for 2024 is 1.7 percent.
 
-Remember: Quality over quantity. A precise "Information not found in document" is better than an unfaithful answer."""
+Q: How does NDS3 differ from NDS1?
+A: According to Table I.1 🔗1 and the accompanying text 🔗2, NDS3 differs from NDS1 in several ways: [synthesize differences from multiple sources].
+
+Remember: Use the EXACT labels provided in "Available Sources". Synthesize when multiple sources are relevant."""

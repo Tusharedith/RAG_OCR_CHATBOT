@@ -31,6 +31,7 @@ class Chunk(BaseModel):
     modality: ModalityType
     page: int
     source: str
+    label: Optional[str] = None  # Table X, Figure Y, or section title
     embedding: Optional[List[float]] = None
     metadata: Optional[dict] = None
 

@@ -1,7 +1,4 @@
-"""
-FastAPI backend for Multi-Modal RAG chatbot
-Handles PDF upload, query processing, and answer generation
-"""
+"""FastAPI backend: PDF upload, query processing, answer generation"""
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,7 +8,6 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 from models import Query, UploadResponse, AnswerSchema
@@ -22,47 +18,38 @@ from retrieval import HybridRetriever
 from generation import AnswerGenerator
 from evaluation import RAGEvaluator
 
-# Initialize FastAPI
 app = FastAPI(
     title="Multi-Modal RAG Chatbot",
     description="Production-grade RAG system for complex policy documents",
     version="1.0.0"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global components (initialized on startup)
 embedder = None
 vector_store = None
 generator = None
 retriever = None
 
-# Storage paths
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize system components"""
+    """Initializes system components on startup"""
     global embedder, vector_store, generator, retriever
     
     print("Initializing Multi-Modal RAG System...")
-    
-    # Initialize embedder
     embedder = UnifiedEmbedder(model_name="all-MiniLM-L6-v2")
-    
-    # Initialize vector store
     vector_store = VectorStore(persist_directory="./chroma_db")
     
-    # Initialize generator (uses local Ollama)
     try:
         generator = AnswerGenerator()
         print("Answer generator initialized with Ollama (Mistral-7B)")
@@ -85,16 +72,7 @@ async def root():
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload and process a PDF document
-    
-    Steps:
-    1. Save uploaded file
-    2. Parse into multi-modal elements
-    3. Apply modality-aware chunking
-    4. Generate embeddings
-    5. Store in ChromaDB
-    """
+    """Uploads PDF, parses multi-modal content, chunks, embeds, stores in ChromaDB"""
     global retriever
     
     try:
@@ -105,35 +83,25 @@ async def upload_document(file: UploadFile = File(...)):
         
         print(f"Processing: {file.filename}")
         
-        # Step 1: Parse PDF
         parser = MultiModalParser()
         elements = parser.parse_pdf(str(file_path))
         print(f"Extracted {len(elements)} elements")
         
-        # Step 2: Chunk with modality awareness
         chunker = ModalityAwareChunker(text_chunk_size=700, overlap=100)
         chunks = chunker.chunk_elements(elements, source=file.filename)
         print(f"Created {len(chunks)} chunks")
         
-        # Step 3: Generate embeddings
         chunks = embedder.embed_chunks(chunks)
         print("Embeddings generated")
         
-        # Step 4: Store in vector database
         collection_name = file.filename.replace(".pdf", "").replace(" ", "_")
         vector_store.create_collection(
             collection_name=collection_name,
             embedding_dimension=embedder.dimension
         )
         vector_store.add_chunks(chunks)
-        
-        # Initialize retriever for this collection
         retriever = HybridRetriever(vector_store, embedder)
-        
-        # Get statistics
         stats = vector_store.get_collection_stats()
-        
-        # Count pages
         pages = set(chunk.page for chunk in chunks)
         num_pages = len(pages)
         
@@ -154,14 +122,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/query", response_model=AnswerSchema)
 async def query_document(query: Query):
-    """
-    Query a document and get answer with citations
-    
-    Steps:
-    1. Retrieve relevant chunks
-    2. Generate faithful answer with PydanticAI
-    3. Return structured response with citations
-    """
+    """Queries document: retrieves chunks, generates answer with citations"""
     if not retriever or not generator:
         raise HTTPException(
             status_code=400, 
@@ -169,24 +130,23 @@ async def query_document(query: Query):
         )
     
     try:
-        # Switch to correct collection
         vector_store.get_collection(query.document_id)
-        
-        # Retrieve relevant chunks
         retrieved_chunks = retriever.retrieve(
             query=query.question,
             top_k=query.top_k,
             use_reranking=True,
-            use_rrf=False  # Set to True for bonus RRF
+            use_rrf=False
         )
         
         print(f"Retrieved {len(retrieved_chunks)} chunks for: {query.question}")
-        
-        # Generate answer with clickable citations
         answer = generator.generate_answer(
             query=query.question,
             retrieved_chunks=retrieved_chunks
         )
+        
+        print(f"\n[API] Returning answer with {len(answer.citations)} citations")
+        for i, cit in enumerate(answer.citations, 1):
+            print(f"  Citation {i}: id={cit.id}, label={cit.label}, page={cit.page}, modality={cit.modality}")
         
         return answer
     

@@ -1,6 +1,4 @@
-"""
-ChromaDB vector store with metadata preservation
-"""
+"""ChromaDB vector store for embeddings and metadata"""
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Optional
@@ -9,13 +7,9 @@ import os
 
 
 class VectorStore:
-    """
-    ChromaDB-backed vector store with metadata
-    Stores: embeddings, content, page, modality, source
-    """
+    """ChromaDB wrapper: stores embeddings, content, page, modality"""
     
     def __init__(self, persist_directory: str = "./chroma_db"):
-        """Initialize ChromaDB client"""
         self.persist_directory = persist_directory
         os.makedirs(persist_directory, exist_ok=True)
         
@@ -35,7 +29,6 @@ class VectorStore:
         Create or get collection for a document
         """
         try:
-            # Delete if exists (for re-indexing)
             try:
                 self.client.delete_collection(collection_name)
             except:
@@ -52,9 +45,7 @@ class VectorStore:
             self.collection = self.client.get_collection(collection_name)
     
     def add_chunks(self, chunks: List[Chunk]) -> int:
-        """
-        Add chunks to vector store with embeddings and metadata
-        """
+        """Adds chunks with embeddings and metadata to ChromaDB"""
         if not chunks:
             return 0
         
@@ -62,7 +53,6 @@ class VectorStore:
         embeddings = [chunk.embedding for chunk in chunks]
         documents = [chunk.content for chunk in chunks]
         
-        # Prepare metadata (ChromaDB requires dict of lists)
         metadatas = []
         for chunk in chunks:
             metadata = {
@@ -71,7 +61,8 @@ class VectorStore:
                 "source": chunk.source,
                 "chunk_index": chunk.metadata.get("chunk_index", 0) if chunk.metadata else 0
             }
-            # Only add section if it exists and is not None/empty
+            if chunk.label:
+                metadata["label"] = str(chunk.label)
             if chunk.metadata and chunk.metadata.get("section"):
                 metadata["section"] = str(chunk.metadata.get("section"))
             metadatas.append(metadata)
@@ -89,17 +80,7 @@ class VectorStore:
     def query(self, query_embedding: List[float], 
               top_k: int = 5,
               modality_filter: Optional[ModalityType] = None) -> List[Dict]:
-        """
-        Query vector store with semantic similarity
-        
-        Args:
-            query_embedding: Query vector
-            top_k: Number of results
-            modality_filter: Optional filter by modality
-        
-        Returns:
-            List of results with metadata
-        """
+        """Queries vector store with semantic similarity"""
         where_filter = None
         if modality_filter:
             where_filter = {"modality": modality_filter.value}
@@ -111,7 +92,6 @@ class VectorStore:
             include=["documents", "metadatas", "distances"]
         )
         
-        # Format results
         formatted_results = []
         for i in range(len(results['ids'][0])):
             metadata = results['metadatas'][0][i]
@@ -121,17 +101,17 @@ class VectorStore:
                 "page": metadata['page'],
                 "modality": metadata['modality'],
                 "source": metadata['source'],
-                "section": metadata.get('section'),  # Preserve section metadata
-                "score": 1 - results['distances'][0][i]  # Convert distance to similarity
+                "label": metadata.get('label'),
+                "section": metadata.get('section'),
+                "score": 1 - results['distances'][0][i]
             })
         
         return formatted_results
     
     def get_collection_stats(self) -> Dict:
-        """Get statistics about the collection"""
+        """Returns collection statistics"""
         count = self.collection.count()
         
-        # Get sample to analyze modalities
         if count > 0:
             sample = self.collection.get(limit=min(count, 1000))
             modalities = [m['modality'] for m in sample['metadatas']]
@@ -158,6 +138,48 @@ class VectorStore:
         except Exception as e:
             print(f"Collection not found: {e}")
             return None
+    
+    def get_chunks_by_page(self, page_num: int, modality: Optional[str] = None, limit: int = 10) -> List[Dict]:
+        """Gets chunks from specific page, optionally filtered by modality"""
+        try:
+            if modality:
+                where_filter = {
+                    "$and": [
+                        {"page": int(page_num)},
+                        {"modality": str(modality)}
+                    ]
+                }
+            else:
+                where_filter = {"page": int(page_num)}
+            
+            results = self.collection.get(
+                where=where_filter,
+                limit=limit,
+                include=["documents", "metadatas"]
+            )
+            
+            formatted_results = []
+            if results and results.get('ids') and len(results['ids']) > 0:
+                for i in range(len(results['ids'])):
+                    metadata = results['metadatas'][i]
+                    formatted_results.append({
+                        "id": results['ids'][i],
+                        "content": results['documents'][i],
+                        "page": int(metadata.get('page', page_num)),
+                        "modality": metadata.get('modality', 'text'),
+                        "source": metadata.get('source', ''),
+                        "label": metadata.get('label'),
+                        "section": metadata.get('section'),
+                        "score": 0.5
+                    })
+            
+            return formatted_results
+        
+        except Exception as e:
+            print(f"Error getting chunks by page {page_num} (modality={modality}): {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def delete_collection(self, collection_name: str):
         """Delete a collection"""

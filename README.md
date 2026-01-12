@@ -310,16 +310,19 @@ Retrieved Context → Ollama Mistral-7B
 ## 🛠 Tech Stack
 
 ### Backend
-- **FastAPI** 0.115.6 - Modern async web framework
+- **FastAPI** 0.109.0 - Modern async web framework
 - **Ollama** - Local LLM inference (Mistral-7B)
-- **ChromaDB** 0.5.23 - Vector database
-- **SentenceTransformers** 3.3.1 - Embeddings (all-MiniLM-L6-v2)
-- **unstructured** 0.16.12 - PDF text extraction
-- **pdfplumber** 0.11.4 - Fallback PDF parsing
+- **ChromaDB** 0.4.22 - Vector database
+- **SentenceTransformers** 2.3.1 - Embeddings (all-MiniLM-L6-v2)
+- **unstructured** 0.12.4 - PDF text extraction
+- **pdfplumber** 0.10.3 - Fallback PDF parsing
 - **Camelot-py** 0.11.0 - Table extraction (lattice)
-- **pytesseract** 0.3.13 - OCR engine
+- **pytesseract** 0.3.10 - OCR engine
 - **pdf2image** 1.17.0 - PDF to image conversion
-- **Pydantic** 2.10.5 - Data validation
+- **Pydantic** 2.5.3 - Data validation
+- **pydantic-ai** 0.0.13 - AI model integration
+- **LangChain** 0.1.4 - LLM orchestration framework
+- **Anthropic** 0.18.1 - Claude API support
 
 ### Frontend
 - **React** 18.3.1 - UI framework
@@ -480,11 +483,15 @@ app.add_middleware(
 
 ## 🗺️ Roadmap
 
+- [x] Modular ingestion package (text, tables, images)
+- [x] Pydantic-AI integration for enhanced model handling
+- [x] LangChain integration for LLM orchestration
+- [x] Evaluation module foundation (evaluation.py)
 - [ ] GPU acceleration for Ollama
 - [ ] Multi-document querying
 - [ ] Conversational memory (chat history)
 - [ ] Advanced table parsing (merged cells)
-- [ ] Evaluation metrics (RAGAS framework)
+- [ ] Complete evaluation metrics (RAGAS framework)
 - [ ] Streaming responses (SSE)
 - [ ] Docker containerization
 - [ ] Production deployment guide
