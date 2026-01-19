@@ -536,7 +536,7 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ## 🙏 Acknowledgments
 
-- **Ollama Team** - Local LLM inference
+- **Ollama Team** - Local LLM inference 
 - **LangChain Community** - RAG inspiration
 - **unstructured.io** - PDF parsing library
 - **ChromaDB Team** - Vector database
@@ -553,4 +553,4 @@ For issues or questions:
 
 ---
 
-**⭐ Star this repo if you find it useful!**
+**⭐ Star this repo if you find it useful and Follow me!**
